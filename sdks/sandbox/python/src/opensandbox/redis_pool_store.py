@@ -51,6 +51,8 @@ class RedisPoolStateStore:
     _TAKE_IDLE_SCRIPT = """
 local redis_time = redis.call('TIME')
 local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+local min_remaining_ttl_ms = tonumber(ARGV[1]) or 0
+local cutoff_ms = now_ms + min_remaining_ttl_ms
 while true do
   local sandbox_id = redis.call('LPOP', KEYS[1])
   if not sandbox_id then
@@ -59,7 +61,7 @@ while true do
   local expires_at = redis.call('HGET', KEYS[2], sandbox_id)
   if expires_at then
     redis.call('HDEL', KEYS[2], sandbox_id)
-    if tonumber(expires_at) > now_ms then
+    if tonumber(expires_at) > cutoff_ms then
       return sandbox_id
     end
   end
@@ -99,9 +101,11 @@ return 0
     _REAP_EXPIRED_SCRIPT = """
 local redis_time = redis.call('TIME')
 local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+local min_remaining_ttl_ms = tonumber(ARGV[1]) or 0
+local cutoff_ms = now_ms + min_remaining_ttl_ms
 local entries = redis.call('HGETALL', KEYS[2])
 for i = 1, #entries, 2 do
-  if tonumber(entries[i + 1]) <= now_ms then
+  if tonumber(entries[i + 1]) <= cutoff_ms then
     redis.call('HDEL', KEYS[2], entries[i])
     redis.call('LREM', KEYS[1], 0, entries[i])
   end
@@ -116,6 +120,17 @@ return 1
         self._default_idle_ttl = timedelta(hours=24)
 
     def try_take_idle(self, pool_name: str) -> str | None:
+        return self._take_idle(pool_name, "0")
+
+    def try_take_idle_min_ttl(
+        self, pool_name: str, min_remaining_ttl: timedelta
+    ) -> str | None:
+        """Variant of :meth:`try_take_idle` that skips entries with insufficient remaining TTL."""
+        if min_remaining_ttl.total_seconds() <= 0:
+            return self.try_take_idle(pool_name)
+        return self._take_idle(pool_name, str(max(0, _millis(min_remaining_ttl))))
+
+    def _take_idle(self, pool_name: str, min_remaining_ttl_ms: str) -> str | None:
         result = self._execute(
             "try_take_idle",
             pool_name,
@@ -124,6 +139,7 @@ return 1
                 2,
                 self._idle_list_key(pool_name),
                 self._idle_expires_key(pool_name),
+                min_remaining_ttl_ms,
             ),
         )
         return _decode(result) if result is not None else None
@@ -201,6 +217,18 @@ return 1
         )
 
     def reap_expired_idle(self, pool_name: str, now: datetime) -> None:
+        self._reap_idle(pool_name, "0")
+
+    def reap_expired_idle_min_ttl(
+        self, pool_name: str, now: datetime, min_remaining_ttl: timedelta
+    ) -> None:
+        """Variant of :meth:`reap_expired_idle` that also evicts near-expiry entries."""
+        if min_remaining_ttl.total_seconds() <= 0:
+            self.reap_expired_idle(pool_name, now)
+            return
+        self._reap_idle(pool_name, str(max(0, _millis(min_remaining_ttl))))
+
+    def _reap_idle(self, pool_name: str, min_remaining_ttl_ms: str) -> None:
         self._execute(
             "reap_expired_idle",
             pool_name,
@@ -209,6 +237,7 @@ return 1
                 2,
                 self._idle_list_key(pool_name),
                 self._idle_expires_key(pool_name),
+                min_remaining_ttl_ms,
             ),
         )
 

@@ -23,7 +23,12 @@ from concurrent.futures import Executor, wait
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from opensandbox.pool_types import PoolConfig, PoolState, PoolStateStore
+from opensandbox.pool_types import (
+    PoolConfig,
+    PoolState,
+    PoolStateStore,
+    reap_expired_idle_with_min_ttl as _reap_expired_idle_with_min_ttl,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +117,9 @@ def _run_primary_replenish_once(
     ttl = config.primary_lock_ttl
     now = datetime.now(timezone.utc)
 
-    state_store.reap_expired_idle(pool_name, now)
+    _reap_expired_idle_with_min_ttl(
+        state_store, pool_name, now, config.acquire_min_remaining_ttl
+    )
     counters = state_store.snapshot_counters(pool_name)
     excess = max(0, counters.idle_count - config.max_idle)
     to_remove = min(excess, int(config.warmup_concurrency or 1))

@@ -724,6 +724,11 @@ class SandboxPool internal constructor(
             return this
         }
 
+        fun acquireMinRemainingTtl(acquireMinRemainingTtl: Duration): Builder {
+            configBuilder.acquireMinRemainingTtl(acquireMinRemainingTtl)
+            return this
+        }
+
         fun warmupReadyTimeout(warmupReadyTimeout: Duration): Builder {
             configBuilder.warmupReadyTimeout(warmupReadyTimeout)
             return this

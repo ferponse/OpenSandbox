@@ -35,17 +35,31 @@ class InMemoryPoolStateStore:
         self._lock = RLock()
 
     def try_take_idle(self, pool_name: str) -> str | None:
+        return self._take_idle(pool_name, _now())
+
+    def try_take_idle_min_ttl(
+        self, pool_name: str, min_remaining_ttl: timedelta
+    ) -> str | None:
+        """Variant of :meth:`try_take_idle` that skips entries with insufficient remaining TTL.
+
+        Entries failing the check are still consumed (removed from idle membership) so
+        the pool can replenish with fresh ones on the next reconcile.
+        """
+        if min_remaining_ttl.total_seconds() <= 0:
+            return self.try_take_idle(pool_name)
+        return self._take_idle(pool_name, _now() + min_remaining_ttl)
+
+    def _take_idle(self, pool_name: str, cutoff: datetime) -> str | None:
         with self._lock:
             state = self._pools.get(pool_name)
             if state is None:
                 return None
-            now = _now()
             while state.queue:
                 sandbox_id = state.queue.popleft()
                 entry = state.entries.pop(sandbox_id, None)
                 if entry is None:
                     continue
-                if entry.expires_at > now:
+                if entry.expires_at > cutoff:
                     return sandbox_id
             return None
 
@@ -81,6 +95,16 @@ class InMemoryPoolStateStore:
     def reap_expired_idle(self, pool_name: str, now: datetime) -> None:
         with self._lock:
             self._reap_locked(pool_name, now)
+
+    def reap_expired_idle_min_ttl(
+        self, pool_name: str, now: datetime, min_remaining_ttl: timedelta
+    ) -> None:
+        """Variant of :meth:`reap_expired_idle` that also evicts near-expiry entries."""
+        if min_remaining_ttl.total_seconds() <= 0:
+            self.reap_expired_idle(pool_name, now)
+            return
+        with self._lock:
+            self._reap_locked(pool_name, now + min_remaining_ttl)
 
     def snapshot_counters(self, pool_name: str) -> StoreCounters:
         with self._lock:

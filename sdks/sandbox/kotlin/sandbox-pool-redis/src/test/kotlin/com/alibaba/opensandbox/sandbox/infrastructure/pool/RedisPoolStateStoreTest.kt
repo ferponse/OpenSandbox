@@ -153,6 +153,33 @@ class RedisPoolStateStoreTest {
     }
 
     @Test
+    fun `reapExpiredIdle with minRemainingTtl evicts near-expiry entries`() {
+        val stateStore = requireStore()
+
+        stateStore.setIdleEntryTtl(poolName, Duration.ofMillis(500))
+        stateStore.putIdle(poolName, "id-1")
+        stateStore.putIdle(poolName, "id-2")
+
+        // 60s threshold against 500ms TTL → both entries are near-expiry and reaped.
+        stateStore.reapExpiredIdle(poolName, Instant.now(), Duration.ofSeconds(60))
+
+        assertEquals(0, stateStore.snapshotCounters(poolName).idleCount)
+        assertNull(stateStore.tryTakeIdle(poolName))
+    }
+
+    @Test
+    fun `reapExpiredIdle with minRemainingTtl preserves entries above the threshold`() {
+        val stateStore = requireStore()
+
+        stateStore.setIdleEntryTtl(poolName, Duration.ofMinutes(10))
+        stateStore.putIdle(poolName, "id-1")
+
+        stateStore.reapExpiredIdle(poolName, Instant.now(), Duration.ofSeconds(60))
+
+        assertEquals(1, stateStore.snapshotCounters(poolName).idleCount)
+    }
+
+    @Test
     fun `tryTakeIdle with minRemainingTtl returns entries that satisfy the threshold`() {
         val stateStore = requireStore()
 

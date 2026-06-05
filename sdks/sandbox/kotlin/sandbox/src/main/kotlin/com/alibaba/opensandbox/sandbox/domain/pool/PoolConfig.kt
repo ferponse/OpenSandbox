@@ -43,9 +43,10 @@ import kotlin.math.ceil
  * @property acquireSkipHealthCheck When true, skip readiness checks for sandboxes returned by acquire (default: false).
  * @property acquireMinRemainingTtl Minimum remaining TTL an idle sandbox must have to be returned by acquire.
  * Idle entries closer to expiry than this threshold are discarded so the subsequent ready-check and
- * any user-side renew have time to run before server-side expiry. Default [Duration.ZERO] preserves the
- * pre-existing binary-expiry behavior (any non-expired idle entry is returnable). Recommended value is
- * a small multiple of [acquireReadyTimeout].
+ * any user-side renew have time to run before server-side expiry. Defaults to 60s, which covers the
+ * default [acquireReadyTimeout] of 30s with comfortable headroom. Must be strictly less than
+ * [idleTimeout] — a value at or above [idleTimeout] would reject every freshly warmed entry. Set to
+ * [Duration.ZERO] to opt out and restore the pre-existing binary-expiry behavior.
  * @property warmupReadyTimeout Max time to wait for a pool-created sandbox to become ready (default: 30s).
  * @property warmupHealthCheckPollingInterval Poll interval while waiting for a pool-created sandbox to become ready
  * (default: 200ms).
@@ -94,6 +95,10 @@ class PoolConfig private constructor(
             "acquireHealthCheckPollingInterval must be positive"
         }
         require(!acquireMinRemainingTtl.isNegative) { "acquireMinRemainingTtl must be non-negative" }
+        require(acquireMinRemainingTtl < idleTimeout) {
+            "acquireMinRemainingTtl ($acquireMinRemainingTtl) must be strictly less than " +
+                "idleTimeout ($idleTimeout); otherwise every warmed idle entry would be rejected"
+        }
         require(!warmupReadyTimeout.isNegative && !warmupReadyTimeout.isZero) { "warmupReadyTimeout must be positive" }
         require(!warmupHealthCheckPollingInterval.isNegative && !warmupHealthCheckPollingInterval.isZero) {
             "warmupHealthCheckPollingInterval must be positive"
@@ -108,7 +113,7 @@ class PoolConfig private constructor(
         private const val DEFAULT_DEGRADED_THRESHOLD = 3
         private val DEFAULT_ACQUIRE_READY_TIMEOUT = Duration.ofSeconds(30)
         private val DEFAULT_ACQUIRE_HEALTH_CHECK_POLLING_INTERVAL = Duration.ofMillis(200)
-        private val DEFAULT_ACQUIRE_MIN_REMAINING_TTL: Duration = Duration.ZERO
+        private val DEFAULT_ACQUIRE_MIN_REMAINING_TTL: Duration = Duration.ofSeconds(60)
         private val DEFAULT_WARMUP_READY_TIMEOUT = Duration.ofSeconds(30)
         private val DEFAULT_WARMUP_HEALTH_CHECK_POLLING_INTERVAL = Duration.ofMillis(200)
         private val DEFAULT_IDLE_TIMEOUT = Duration.ofHours(24)
@@ -244,8 +249,8 @@ class PoolConfig private constructor(
          * Idle entries closer to expiry than [acquireMinRemainingTtl] are discarded so the subsequent
          * ready-check and any user-side renew have time to run before the server-side expiry kicks in.
          *
-         * Must be non-negative. The default [Duration.ZERO] preserves the pre-existing binary-expiry behavior.
-         * A typical value is a small multiple of `acquireReadyTimeout`.
+         * Must be non-negative and strictly less than [idleTimeout]. Defaults to 60s. Set to
+         * [Duration.ZERO] to opt out and restore the pre-existing binary-expiry behavior.
          */
         fun acquireMinRemainingTtl(acquireMinRemainingTtl: Duration): Builder {
             this.acquireMinRemainingTtl = acquireMinRemainingTtl

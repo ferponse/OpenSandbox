@@ -55,6 +55,17 @@ class AsyncRedisPoolStateStore:
         self._default_idle_ttl = timedelta(hours=24)
 
     async def try_take_idle(self, pool_name: str) -> str | None:
+        return await self._take_idle(pool_name, "0")
+
+    async def try_take_idle_min_ttl(
+        self, pool_name: str, min_remaining_ttl: timedelta
+    ) -> str | None:
+        """Variant of :meth:`try_take_idle` that skips entries with insufficient remaining TTL."""
+        if min_remaining_ttl.total_seconds() <= 0:
+            return await self.try_take_idle(pool_name)
+        return await self._take_idle(pool_name, str(max(0, _millis(min_remaining_ttl))))
+
+    async def _take_idle(self, pool_name: str, min_remaining_ttl_ms: str) -> str | None:
         result = await self._execute(
             "try_take_idle",
             pool_name,
@@ -65,6 +76,7 @@ class AsyncRedisPoolStateStore:
                     2,
                     self._idle_list_key(pool_name),
                     self._idle_expires_key(pool_name),
+                    min_remaining_ttl_ms,
                 ),
             ),
         )
@@ -160,6 +172,18 @@ class AsyncRedisPoolStateStore:
         )
 
     async def reap_expired_idle(self, pool_name: str, now: datetime) -> None:
+        await self._reap_idle(pool_name, "0")
+
+    async def reap_expired_idle_min_ttl(
+        self, pool_name: str, now: datetime, min_remaining_ttl: timedelta
+    ) -> None:
+        """Variant of :meth:`reap_expired_idle` that also evicts near-expiry entries."""
+        if min_remaining_ttl.total_seconds() <= 0:
+            await self.reap_expired_idle(pool_name, now)
+            return
+        await self._reap_idle(pool_name, str(max(0, _millis(min_remaining_ttl))))
+
+    async def _reap_idle(self, pool_name: str, min_remaining_ttl_ms: str) -> None:
         await self._execute(
             "reap_expired_idle",
             pool_name,
@@ -170,6 +194,7 @@ class AsyncRedisPoolStateStore:
                     2,
                     self._idle_list_key(pool_name),
                     self._idle_expires_key(pool_name),
+                    min_remaining_ttl_ms,
                 ),
             ),
         )

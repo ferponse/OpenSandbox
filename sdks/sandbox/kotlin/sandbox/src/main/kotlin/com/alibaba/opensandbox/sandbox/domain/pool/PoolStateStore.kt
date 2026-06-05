@@ -114,6 +114,28 @@ interface PoolStateStore {
     )
 
     /**
+     * Variant of [reapExpiredIdle] that also evicts entries whose remaining TTL is below
+     * [minRemainingTtl]. Reconcile calls this so near-expiry entries are reclaimed proactively
+     * (rather than waiting for them to fully expire), letting the pool replenish them with fresh
+     * sandboxes before a future acquire would discard them.
+     *
+     * Default implementation falls back to [reapExpiredIdle] when [minRemainingTtl] is zero or
+     * negative so existing custom store implementations remain source-compatible.
+     */
+    fun reapExpiredIdle(
+        poolName: String,
+        now: Instant,
+        minRemainingTtl: Duration,
+    ) {
+        if (minRemainingTtl.isNegative || minRemainingTtl.isZero) {
+            reapExpiredIdle(poolName, now)
+            return
+        }
+        // Custom stores that do not override this method fall back to the strict-expiry sweep.
+        reapExpiredIdle(poolName, now)
+    }
+
+    /**
      * Returns a snapshot of counters for the pool (at least idle count).
      * Eventually consistent for distributed stores.
      */

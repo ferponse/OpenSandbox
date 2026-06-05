@@ -72,7 +72,7 @@ internal object PoolReconciler {
         val ttl = config.primaryLockTtl
         val now = Instant.now()
 
-        stateStore.reapExpiredIdle(poolName, now)
+        stateStore.reapExpiredIdle(poolName, now, config.acquireMinRemainingTtl)
         val counters = stateStore.snapshotCounters(poolName)
         val excess = (counters.idleCount - config.maxIdle).coerceAtLeast(0)
         val toRemove = minOf(excess, config.warmupConcurrency)

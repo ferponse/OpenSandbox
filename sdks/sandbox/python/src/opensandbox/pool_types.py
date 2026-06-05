@@ -91,7 +91,13 @@ class PoolSnapshot:
 
 
 class PoolStateStore(Protocol):
-    """Coordination state and idle sandbox membership store."""
+    """Coordination state and idle sandbox membership store.
+
+    The ``*_min_ttl`` overloads are optional: callers must use
+    :func:`try_take_idle_min_ttl` and :func:`reap_expired_idle_min_ttl` to
+    obtain near-expiry filtering, but stores predating those methods continue
+    to work via the binary-expiry fallback in the call sites.
+    """
 
     def try_take_idle(self, pool_name: str) -> str | None: ...
 
@@ -195,6 +201,7 @@ class PoolConfig:
     warmup_skip_health_check: bool = False
     idle_timeout: timedelta = timedelta(hours=24)
     drain_timeout: timedelta = timedelta(seconds=30)
+    acquire_min_remaining_ttl: timedelta = timedelta(seconds=60)
 
     def __post_init__(self) -> None:
         owner_id = self.owner_id or f"pool-owner-{uuid4()}"
@@ -231,6 +238,9 @@ class PoolConfig:
         _require_positive(self.idle_timeout, "idle_timeout must be positive")
         if self.drain_timeout.total_seconds() < 0:
             raise ValueError("drain_timeout must be non-negative")
+        _require_acquire_min_remaining_ttl(
+            self.acquire_min_remaining_ttl, self.idle_timeout
+        )
 
     def with_max_idle(self, max_idle: int) -> PoolConfig:
         return replace(self, max_idle=max_idle)
@@ -261,6 +271,7 @@ class AsyncPoolConfig:
     warmup_skip_health_check: bool = False
     idle_timeout: timedelta = timedelta(hours=24)
     drain_timeout: timedelta = timedelta(seconds=30)
+    acquire_min_remaining_ttl: timedelta = timedelta(seconds=60)
 
     def __post_init__(self) -> None:
         owner_id = self.owner_id or f"pool-owner-{uuid4()}"
@@ -297,6 +308,9 @@ class AsyncPoolConfig:
         _require_positive(self.idle_timeout, "idle_timeout must be positive")
         if self.drain_timeout.total_seconds() < 0:
             raise ValueError("drain_timeout must be non-negative")
+        _require_acquire_min_remaining_ttl(
+            self.acquire_min_remaining_ttl, self.idle_timeout
+        )
 
     def with_max_idle(self, max_idle: int) -> AsyncPoolConfig:
         return replace(self, max_idle=max_idle)
@@ -310,3 +324,87 @@ def _require_text(value: str, message: str) -> None:
 def _require_positive(value: timedelta, message: str) -> None:
     if value.total_seconds() <= 0:
         raise ValueError(message)
+
+
+def try_take_idle_with_min_ttl(
+    store: PoolStateStore, pool_name: str, min_remaining_ttl: timedelta
+) -> str | None:
+    """Call ``store.try_take_idle_min_ttl`` if available, else fall back to ``try_take_idle``.
+
+    Pool stores added before #983 only implement :meth:`PoolStateStore.try_take_idle`.
+    This helper preserves source compatibility for those stores: when the threshold is
+    zero/negative or the store does not implement the variant, the binary-expiry path
+    is used. Otherwise the new filtering path is taken.
+    """
+    if min_remaining_ttl.total_seconds() <= 0:
+        return store.try_take_idle(pool_name)
+    method = getattr(store, "try_take_idle_min_ttl", None)
+    if callable(method):
+        return method(pool_name, min_remaining_ttl)
+    return store.try_take_idle(pool_name)
+
+
+async def try_take_idle_with_min_ttl_async(
+    store: AsyncPoolStateStore, pool_name: str, min_remaining_ttl: timedelta
+) -> str | None:
+    """Async counterpart of :func:`try_take_idle_with_min_ttl`."""
+    if min_remaining_ttl.total_seconds() <= 0:
+        return await store.try_take_idle(pool_name)
+    method = getattr(store, "try_take_idle_min_ttl", None)
+    if callable(method):
+        return await method(pool_name, min_remaining_ttl)
+    return await store.try_take_idle(pool_name)
+
+
+def reap_expired_idle_with_min_ttl(
+    store: PoolStateStore,
+    pool_name: str,
+    now: datetime,
+    min_remaining_ttl: timedelta,
+) -> None:
+    """Call ``store.reap_expired_idle_min_ttl`` if available, else fall back."""
+    if min_remaining_ttl.total_seconds() <= 0:
+        store.reap_expired_idle(pool_name, now)
+        return
+    method = getattr(store, "reap_expired_idle_min_ttl", None)
+    if callable(method):
+        method(pool_name, now, min_remaining_ttl)
+        return
+    store.reap_expired_idle(pool_name, now)
+
+
+async def reap_expired_idle_with_min_ttl_async(
+    store: AsyncPoolStateStore,
+    pool_name: str,
+    now: datetime,
+    min_remaining_ttl: timedelta,
+) -> None:
+    """Async counterpart of :func:`reap_expired_idle_with_min_ttl`."""
+    if min_remaining_ttl.total_seconds() <= 0:
+        await store.reap_expired_idle(pool_name, now)
+        return
+    method = getattr(store, "reap_expired_idle_min_ttl", None)
+    if callable(method):
+        await method(pool_name, now, min_remaining_ttl)
+        return
+    await store.reap_expired_idle(pool_name, now)
+
+
+def _require_acquire_min_remaining_ttl(
+    acquire_min_remaining_ttl: timedelta, idle_timeout: timedelta
+) -> None:
+    """Validate ``acquire_min_remaining_ttl``.
+
+    Must be non-negative and strictly less than ``idle_timeout``; otherwise every
+    freshly warmed idle entry would fail the threshold and the pool would discard
+    its entire idle buffer on each acquire.
+    """
+    if acquire_min_remaining_ttl.total_seconds() < 0:
+        raise ValueError("acquire_min_remaining_ttl must be non-negative")
+    if acquire_min_remaining_ttl >= idle_timeout:
+        raise ValueError(
+            "acquire_min_remaining_ttl "
+            f"({acquire_min_remaining_ttl}) must be strictly less than "
+            f"idle_timeout ({idle_timeout}); otherwise every warmed idle entry "
+            "would be rejected"
+        )

@@ -35,17 +35,27 @@ class InMemoryAsyncPoolStateStore:
         self._lock = asyncio.Lock()
 
     async def try_take_idle(self, pool_name: str) -> str | None:
+        return await self._take_idle(pool_name, _now())
+
+    async def try_take_idle_min_ttl(
+        self, pool_name: str, min_remaining_ttl: timedelta
+    ) -> str | None:
+        """Variant of :meth:`try_take_idle` that skips entries with insufficient remaining TTL."""
+        if min_remaining_ttl.total_seconds() <= 0:
+            return await self.try_take_idle(pool_name)
+        return await self._take_idle(pool_name, _now() + min_remaining_ttl)
+
+    async def _take_idle(self, pool_name: str, cutoff: datetime) -> str | None:
         async with self._lock:
             state = self._pools.get(pool_name)
             if state is None:
                 return None
-            now = _now()
             while state.queue:
                 sandbox_id = state.queue.popleft()
                 entry = state.entries.pop(sandbox_id, None)
                 if entry is None:
                     continue
-                if entry.expires_at > now:
+                if entry.expires_at > cutoff:
                     return sandbox_id
             return None
 
@@ -81,6 +91,16 @@ class InMemoryAsyncPoolStateStore:
     async def reap_expired_idle(self, pool_name: str, now: datetime) -> None:
         async with self._lock:
             self._reap_locked(pool_name, now)
+
+    async def reap_expired_idle_min_ttl(
+        self, pool_name: str, now: datetime, min_remaining_ttl: timedelta
+    ) -> None:
+        """Variant of :meth:`reap_expired_idle` that also evicts near-expiry entries."""
+        if min_remaining_ttl.total_seconds() <= 0:
+            await self.reap_expired_idle(pool_name, now)
+            return
+        async with self._lock:
+            self._reap_locked(pool_name, now + min_remaining_ttl)
 
     async def snapshot_counters(self, pool_name: str) -> StoreCounters:
         async with self._lock:

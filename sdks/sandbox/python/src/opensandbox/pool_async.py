@@ -41,6 +41,7 @@ from opensandbox.pool_types import (
     PoolLifecycleState,
     PoolSnapshot,
     PoolState,
+    try_take_idle_with_min_ttl_async as _try_take_idle_with_min_ttl_async,
 )
 from opensandbox.sandbox import Sandbox
 
@@ -167,7 +168,11 @@ class SandboxPoolAsync:
                     f"Cannot acquire when pool state is {state.value}"
                 )
             pool_name = self._config.pool_name
-            sandbox_id = await self._state_store.try_take_idle(pool_name)
+            sandbox_id = await _try_take_idle_with_min_ttl_async(
+                self._state_store,
+                pool_name,
+                self._config.acquire_min_remaining_ttl,
+            )
             no_idle_reason: str | None = None
             idle_connect_failure: Exception | None = None
             if sandbox_id is not None:

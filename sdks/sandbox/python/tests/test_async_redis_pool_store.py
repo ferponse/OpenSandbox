@@ -69,6 +69,46 @@ async def test_async_redis_store_reap_expired_idle(
 
 
 @pytest.mark.asyncio
+async def test_async_redis_store_try_take_idle_min_ttl_skips_near_expiry(
+    async_redis_store: tuple[AsyncRedisPoolStateStore, Any, str],
+) -> None:
+    store, _, _ = async_redis_store
+    await store.set_idle_entry_ttl("pool", timedelta(seconds=5))
+    await store.put_idle("pool", "id-1")
+    await store.put_idle("pool", "id-2")
+
+    assert await store.try_take_idle_min_ttl("pool", timedelta(seconds=60)) is None
+    assert (await store.snapshot_counters("pool")).idle_count == 0
+
+
+@pytest.mark.asyncio
+async def test_async_redis_store_try_take_idle_min_ttl_returns_above_threshold(
+    async_redis_store: tuple[AsyncRedisPoolStateStore, Any, str],
+) -> None:
+    store, _, _ = async_redis_store
+    await store.set_idle_entry_ttl("pool", timedelta(minutes=10))
+    await store.put_idle("pool", "id-1")
+
+    assert await store.try_take_idle_min_ttl("pool", timedelta(seconds=60)) == "id-1"
+
+
+@pytest.mark.asyncio
+async def test_async_redis_store_reap_expired_idle_min_ttl_evicts_near_expiry(
+    async_redis_store: tuple[AsyncRedisPoolStateStore, Any, str],
+) -> None:
+    store, _, _ = async_redis_store
+    await store.set_idle_entry_ttl("pool", timedelta(seconds=5))
+    await store.put_idle("pool", "id-1")
+    await store.put_idle("pool", "id-2")
+
+    await store.reap_expired_idle_min_ttl(
+        "pool", datetime.now(timezone.utc), timedelta(seconds=60)
+    )
+
+    assert (await store.snapshot_counters("pool")).idle_count == 0
+
+
+@pytest.mark.asyncio
 async def test_async_redis_store_primary_lock_owner_semantics(
     async_redis_store: tuple[AsyncRedisPoolStateStore, Any, str],
 ) -> None:

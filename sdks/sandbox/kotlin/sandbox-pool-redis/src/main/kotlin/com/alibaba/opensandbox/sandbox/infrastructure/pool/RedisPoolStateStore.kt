@@ -148,11 +148,30 @@ class RedisPoolStateStore(
         poolName: String,
         now: Instant,
     ) {
+        reapIdle(poolName, "0")
+    }
+
+    override fun reapExpiredIdle(
+        poolName: String,
+        now: Instant,
+        minRemainingTtl: Duration,
+    ) {
+        if (minRemainingTtl.isNegative || minRemainingTtl.isZero) {
+            reapIdle(poolName, "0")
+            return
+        }
+        reapIdle(poolName, minRemainingTtl.toMillis().coerceAtLeast(0).toString())
+    }
+
+    private fun reapIdle(
+        poolName: String,
+        minRemainingTtlMs: String,
+    ) {
         execute("reapExpiredIdle", poolName) {
             redis.eval(
                 REAP_EXPIRED_SCRIPT,
                 listOf(idleListKey(poolName), idleExpiresKey(poolName)),
-                emptyList<String>(),
+                listOf(minRemainingTtlMs),
             )
         }
     }
@@ -310,9 +329,11 @@ class RedisPoolStateStore(
             """
             local redis_time = redis.call('TIME')
             local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+            local min_remaining_ttl_ms = tonumber(ARGV[1]) or 0
+            local cutoff_ms = now_ms + min_remaining_ttl_ms
             local entries = redis.call('HGETALL', KEYS[2])
             for i = 1, #entries, 2 do
-              if tonumber(entries[i + 1]) <= now_ms then
+              if tonumber(entries[i + 1]) <= cutoff_ms then
                 redis.call('HDEL', KEYS[2], entries[i])
                 redis.call('LREM', KEYS[1], 0, entries[i])
               end

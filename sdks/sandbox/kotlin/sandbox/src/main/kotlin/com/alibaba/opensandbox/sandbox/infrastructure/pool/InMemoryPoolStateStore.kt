@@ -127,6 +127,21 @@ class InMemoryPoolStateStore : PoolStateStore {
         state.queue.removeIf { sandboxId -> !state.map.containsKey(sandboxId) }
     }
 
+    override fun reapExpiredIdle(
+        poolName: String,
+        now: Instant,
+        minRemainingTtl: Duration,
+    ) {
+        if (minRemainingTtl.isNegative || minRemainingTtl.isZero) {
+            reapExpiredIdle(poolName, now)
+            return
+        }
+        val state = pools[poolName] ?: return
+        val cutoff = now.plus(minRemainingTtl)
+        state.map.entries.removeIf { !it.value.expiresAt.isAfter(cutoff) }
+        state.queue.removeIf { sandboxId -> !state.map.containsKey(sandboxId) }
+    }
+
     override fun snapshotCounters(poolName: String): StoreCounters {
         val state = pools[poolName] ?: return StoreCounters(idleCount = 0)
         val now = Instant.now()

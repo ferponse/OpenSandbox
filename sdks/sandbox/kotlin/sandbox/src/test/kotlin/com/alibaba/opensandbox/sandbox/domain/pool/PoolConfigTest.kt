@@ -47,7 +47,7 @@ class PoolConfigTest {
         assertEquals(Duration.ofMillis(200), config.acquireHealthCheckPollingInterval)
         assertFalse(config.acquireSkipHealthCheck)
         assertEquals(null, config.acquireHealthCheck)
-        assertEquals(Duration.ZERO, config.acquireMinRemainingTtl)
+        assertEquals(Duration.ofSeconds(60), config.acquireMinRemainingTtl)
         assertEquals(Duration.ofHours(24), config.idleTimeout)
     }
 
@@ -102,5 +102,40 @@ class PoolConfigTest {
                 .acquireMinRemainingTtl(Duration.ofSeconds(-1))
 
         assertThrows(IllegalArgumentException::class.java) { builder.build() }
+    }
+
+    @Test
+    fun `build rejects acquireMinRemainingTtl greater than or equal to idleTimeout`() {
+        // idleTimeout = 30s with the default 60s threshold would reject every freshly warmed entry
+        // before it could ever be acquired — the build() guard must catch this misconfiguration.
+        val builder =
+            PoolConfig.builder()
+                .poolName("test-pool")
+                .ownerId("test-owner")
+                .maxIdle(2)
+                .stateStore(InMemoryPoolStateStore())
+                .connectionConfig(ConnectionConfig.builder().build())
+                .creationSpec(PoolCreationSpec.builder().image("ubuntu:22.04").build())
+                .idleTimeout(Duration.ofSeconds(30))
+
+        assertThrows(IllegalArgumentException::class.java) { builder.build() }
+    }
+
+    @Test
+    fun `build accepts acquireMinRemainingTtl just below idleTimeout`() {
+        // Strict-less-than boundary: 9s < 10s passes.
+        val config =
+            PoolConfig.builder()
+                .poolName("test-pool")
+                .ownerId("test-owner")
+                .maxIdle(2)
+                .stateStore(InMemoryPoolStateStore())
+                .connectionConfig(ConnectionConfig.builder().build())
+                .creationSpec(PoolCreationSpec.builder().image("ubuntu:22.04").build())
+                .idleTimeout(Duration.ofSeconds(10))
+                .acquireMinRemainingTtl(Duration.ofSeconds(9))
+                .build()
+
+        assertEquals(Duration.ofSeconds(9), config.acquireMinRemainingTtl)
     }
 }

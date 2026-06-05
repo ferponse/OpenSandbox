@@ -201,6 +201,45 @@ class InMemoryPoolStateStoreTest {
     }
 
     @Test
+    fun `reapExpiredIdle with minRemainingTtl evicts near-expiry entries`() {
+        val inMemoryStore = InMemoryPoolStateStore()
+        inMemoryStore.setIdleEntryTtl(poolName, Duration.ofSeconds(5))
+        inMemoryStore.putIdle(poolName, "id-1")
+        inMemoryStore.putIdle(poolName, "id-2")
+
+        // Sweep with a 60s threshold while entries only have 5s left → both reaped.
+        inMemoryStore.reapExpiredIdle(poolName, Instant.now(), Duration.ofSeconds(60))
+
+        assertEquals(0, inMemoryStore.snapshotCounters(poolName).idleCount)
+    }
+
+    @Test
+    fun `reapExpiredIdle with minRemainingTtl keeps entries above the threshold`() {
+        val inMemoryStore = InMemoryPoolStateStore()
+        inMemoryStore.setIdleEntryTtl(poolName, Duration.ofMinutes(10))
+        inMemoryStore.putIdle(poolName, "id-1")
+
+        inMemoryStore.reapExpiredIdle(poolName, Instant.now(), Duration.ofSeconds(60))
+
+        assertEquals(1, inMemoryStore.snapshotCounters(poolName).idleCount)
+    }
+
+    @Test
+    fun `reapExpiredIdle with zero or negative minRemainingTtl falls back to base sweep`() {
+        val inMemoryStore = InMemoryPoolStateStore()
+        inMemoryStore.setIdleEntryTtl(poolName, Duration.ofSeconds(5))
+        inMemoryStore.putIdle(poolName, "id-1")
+
+        // Zero threshold matches the strict-expiry behavior — entry has 5s left, sweep at "now"
+        // does not evict it.
+        inMemoryStore.reapExpiredIdle(poolName, Instant.now(), Duration.ZERO)
+        assertEquals(1, inMemoryStore.snapshotCounters(poolName).idleCount)
+
+        inMemoryStore.reapExpiredIdle(poolName, Instant.now(), Duration.ofSeconds(-1))
+        assertEquals(1, inMemoryStore.snapshotCounters(poolName).idleCount)
+    }
+
+    @Test
     fun `tryTakeIdle returns entries that satisfy minRemainingTtl`() {
         val inMemoryStore = InMemoryPoolStateStore()
         inMemoryStore.setIdleEntryTtl(poolName, Duration.ofMinutes(10))
