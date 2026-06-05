@@ -209,7 +209,7 @@ class SandboxPool internal constructor(
                 throw PoolNotRunningException("Cannot acquire when pool state is $state")
             }
             val poolName = config.poolName
-            val sandboxId = stateStore.tryTakeIdle(poolName)
+            val sandboxId = stateStore.tryTakeIdle(poolName, config.acquireMinRemainingTtl)
             var noIdleReason: String? = null // null = got a sandbox from idle; non-null = reason we have no usable idle
             var idleConnectFailure: Exception? = null
             if (sandboxId != null) {

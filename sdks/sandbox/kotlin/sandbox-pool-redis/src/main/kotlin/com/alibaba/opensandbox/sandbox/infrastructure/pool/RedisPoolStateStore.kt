@@ -49,13 +49,29 @@ class RedisPoolStateStore(
 ) : PoolStateStore {
     private val defaultIdleTtl: Duration = Duration.ofHours(24)
 
-    override fun tryTakeIdle(poolName: String): String? =
+    override fun tryTakeIdle(poolName: String): String? = takeIdle(poolName, "0")
+
+    override fun tryTakeIdle(
+        poolName: String,
+        minRemainingTtl: Duration,
+    ): String? {
+        if (minRemainingTtl.isNegative || minRemainingTtl.isZero) {
+            return tryTakeIdle(poolName)
+        }
+        val minRemainingTtlMs = minRemainingTtl.toMillis().coerceAtLeast(0).toString()
+        return takeIdle(poolName, minRemainingTtlMs)
+    }
+
+    private fun takeIdle(
+        poolName: String,
+        minRemainingTtlMs: String,
+    ): String? =
         execute("tryTakeIdle", poolName) {
             val result =
                 redis.eval(
                     TAKE_IDLE_SCRIPT,
                     listOf(idleListKey(poolName), idleExpiresKey(poolName)),
-                    emptyList<String>(),
+                    listOf(minRemainingTtlMs),
                 )
             result as? String
         }
@@ -240,6 +256,8 @@ class RedisPoolStateStore(
             """
             local redis_time = redis.call('TIME')
             local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+            local min_remaining_ttl_ms = tonumber(ARGV[1]) or 0
+            local cutoff_ms = now_ms + min_remaining_ttl_ms
             while true do
               local sandbox_id = redis.call('LPOP', KEYS[1])
               if not sandbox_id then
@@ -248,7 +266,7 @@ class RedisPoolStateStore(
               local expires_at = redis.call('HGET', KEYS[2], sandbox_id)
               if expires_at then
                 redis.call('HDEL', KEYS[2], sandbox_id)
-                if tonumber(expires_at) > now_ms then
+                if tonumber(expires_at) > cutoff_ms then
                   return sandbox_id
                 end
               end

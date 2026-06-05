@@ -175,6 +175,42 @@ class InMemoryPoolStateStoreTest {
     }
 
     @Test
+    fun `tryTakeIdle with minRemainingTtl falls back to base behavior when zero or negative`() {
+        store.putIdle(poolName, "id-1")
+        // Duration.ZERO must not change behavior
+        assertEquals("id-1", store.tryTakeIdle(poolName, Duration.ZERO))
+
+        store.putIdle(poolName, "id-2")
+        // Negative also falls through to the base path; should still return the entry
+        assertEquals("id-2", store.tryTakeIdle(poolName, Duration.ofSeconds(-1)))
+    }
+
+    @Test
+    fun `tryTakeIdle skips entries whose remaining TTL is below threshold`() {
+        val inMemoryStore = InMemoryPoolStateStore()
+        // Entries get a 5-second TTL.
+        inMemoryStore.setIdleEntryTtl(poolName, Duration.ofSeconds(5))
+        inMemoryStore.putIdle(poolName, "id-1")
+        inMemoryStore.putIdle(poolName, "id-2")
+
+        // Demand more remaining TTL than the entries have. Both should be discarded;
+        // the call returns null without crossing into another pool's data.
+        assertNull(inMemoryStore.tryTakeIdle(poolName, Duration.ofSeconds(60)))
+        // The discarded entries are also removed from idle membership.
+        assertEquals(0, inMemoryStore.snapshotCounters(poolName).idleCount)
+    }
+
+    @Test
+    fun `tryTakeIdle returns entries that satisfy minRemainingTtl`() {
+        val inMemoryStore = InMemoryPoolStateStore()
+        inMemoryStore.setIdleEntryTtl(poolName, Duration.ofMinutes(10))
+        inMemoryStore.putIdle(poolName, "id-1")
+
+        // 10 minutes of TTL is well above a 60-second threshold.
+        assertEquals("id-1", inMemoryStore.tryTakeIdle(poolName, Duration.ofSeconds(60)))
+    }
+
+    @Test
     fun `snapshotCounters compacts queue tombstones`() {
         store.putIdle(poolName, "id-1")
         store.putIdle(poolName, "id-2")

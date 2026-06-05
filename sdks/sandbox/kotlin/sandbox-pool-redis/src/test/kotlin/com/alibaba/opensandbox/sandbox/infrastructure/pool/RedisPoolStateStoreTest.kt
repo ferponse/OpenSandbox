@@ -137,6 +137,43 @@ class RedisPoolStateStoreTest {
     }
 
     @Test
+    fun `tryTakeIdle with minRemainingTtl skips entries below the threshold`() {
+        val stateStore = requireStore()
+
+        // Entries get a 200ms TTL.
+        stateStore.setIdleEntryTtl(poolName, Duration.ofMillis(200))
+        stateStore.putIdle(poolName, "id-1")
+        stateStore.putIdle(poolName, "id-2")
+
+        // Demand more remaining TTL than the entries can possibly have.
+        // Both should be discarded; the call returns null.
+        assertNull(stateStore.tryTakeIdle(poolName, Duration.ofSeconds(60)))
+        // Discarded entries are also removed from idle membership.
+        assertEquals(0, stateStore.snapshotCounters(poolName).idleCount)
+    }
+
+    @Test
+    fun `tryTakeIdle with minRemainingTtl returns entries that satisfy the threshold`() {
+        val stateStore = requireStore()
+
+        stateStore.setIdleEntryTtl(poolName, Duration.ofMinutes(10))
+        stateStore.putIdle(poolName, "id-1")
+
+        // 10 minutes of TTL is well above a 60-second threshold.
+        assertEquals("id-1", stateStore.tryTakeIdle(poolName, Duration.ofSeconds(60)))
+    }
+
+    @Test
+    fun `tryTakeIdle with zero minRemainingTtl behaves like the base call`() {
+        val stateStore = requireStore()
+
+        stateStore.putIdle(poolName, "id-1")
+        // Duration.ZERO must not change behavior.
+        assertEquals("id-1", stateStore.tryTakeIdle(poolName, Duration.ZERO))
+        assertNull(stateStore.tryTakeIdle(poolName, Duration.ZERO))
+    }
+
+    @Test
     fun `setIdleEntryTtl validates positive duration`() {
         val stateStore = requireStore()
 

@@ -39,6 +39,28 @@ interface PoolStateStore {
     fun tryTakeIdle(poolName: String): String?
 
     /**
+     * Variant of [tryTakeIdle] that skips entries whose remaining TTL is below [minRemainingTtl].
+     *
+     * Atomically removes and returns one idle sandbox ID for the pool whose expiry is at least
+     * [minRemainingTtl] in the future, or null if no such entry exists. Entries failing the check
+     * are still consumed (removed from idle membership) so the pool can replenish with fresh ones.
+     *
+     * Default implementation falls back to [tryTakeIdle] when [minRemainingTtl] is zero or negative
+     * so existing custom store implementations remain source-compatible.
+     */
+    fun tryTakeIdle(
+        poolName: String,
+        minRemainingTtl: Duration,
+    ): String? {
+        if (minRemainingTtl.isNegative || minRemainingTtl.isZero) {
+            return tryTakeIdle(poolName)
+        }
+        // Custom stores that do not override this method fall back to the binary-expiry behavior.
+        // Calling sites that pass a positive minRemainingTtl rely on overrides for correct filtering.
+        return tryTakeIdle(poolName)
+    }
+
+    /**
      * Adds a sandbox ID to the idle set for the pool.
      * Idempotent: duplicate put for same sandboxId leaves membership single-copy.
      */

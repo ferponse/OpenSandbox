@@ -22,6 +22,7 @@ import com.alibaba.opensandbox.sandbox.infrastructure.pool.InMemoryPoolStateStor
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import java.time.Duration
 
@@ -46,6 +47,7 @@ class PoolConfigTest {
         assertEquals(Duration.ofMillis(200), config.acquireHealthCheckPollingInterval)
         assertFalse(config.acquireSkipHealthCheck)
         assertEquals(null, config.acquireHealthCheck)
+        assertEquals(Duration.ZERO, config.acquireMinRemainingTtl)
         assertEquals(Duration.ofHours(24), config.idleTimeout)
     }
 
@@ -65,6 +67,7 @@ class PoolConfigTest {
                 .acquireHealthCheckPollingInterval(Duration.ofMillis(250))
                 .acquireHealthCheck(healthCheck)
                 .acquireSkipHealthCheck()
+                .acquireMinRemainingTtl(Duration.ofSeconds(90))
                 .warmupReadyTimeout(Duration.ofSeconds(45))
                 .warmupHealthCheckPollingInterval(Duration.ofSeconds(1))
                 .warmupHealthCheck(healthCheck)
@@ -77,11 +80,27 @@ class PoolConfigTest {
         assertEquals(Duration.ofMillis(250), config.acquireHealthCheckPollingInterval)
         assertSame(healthCheck, config.acquireHealthCheck)
         assertEquals(true, config.acquireSkipHealthCheck)
+        assertEquals(Duration.ofSeconds(90), config.acquireMinRemainingTtl)
         assertEquals(Duration.ofSeconds(45), config.warmupReadyTimeout)
         assertEquals(Duration.ofSeconds(1), config.warmupHealthCheckPollingInterval)
         assertSame(healthCheck, config.warmupHealthCheck)
         assertSame(preparer, config.warmupSandboxPreparer)
         assertEquals(true, config.warmupSkipHealthCheck)
         assertEquals(Duration.ofMinutes(10), config.idleTimeout)
+    }
+
+    @Test
+    fun `build rejects negative acquireMinRemainingTtl`() {
+        val builder =
+            PoolConfig.builder()
+                .poolName("test-pool")
+                .ownerId("test-owner")
+                .maxIdle(2)
+                .stateStore(InMemoryPoolStateStore())
+                .connectionConfig(ConnectionConfig.builder().build())
+                .creationSpec(PoolCreationSpec.builder().image("ubuntu:22.04").build())
+                .acquireMinRemainingTtl(Duration.ofSeconds(-1))
+
+        assertThrows(IllegalArgumentException::class.java) { builder.build() }
     }
 }

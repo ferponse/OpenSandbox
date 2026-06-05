@@ -43,14 +43,33 @@ class InMemoryPoolStateStore : PoolStateStore {
     /** Per pool: (map = sandboxId -> entry for idempotent put + expiry, queue = FIFO order for take). */
     private val pools = ConcurrentHashMap<String, PoolIdleState>()
 
-    override fun tryTakeIdle(poolName: String): String? {
+    override fun tryTakeIdle(poolName: String): String? = takeIdle(poolName, Instant.now())
+
+    override fun tryTakeIdle(
+        poolName: String,
+        minRemainingTtl: Duration,
+    ): String? {
+        if (minRemainingTtl.isNegative || minRemainingTtl.isZero) {
+            return tryTakeIdle(poolName)
+        }
+        return takeIdle(poolName, Instant.now().plus(minRemainingTtl))
+    }
+
+    /**
+     * Drains the FIFO queue, returning the first idle entry whose [IdleEntry.expiresAt] is
+     * strictly after [cutoff]. Entries failing the check (including already-expired and near-expiry)
+     * are removed from idle membership and discarded so reconcile can replenish.
+     */
+    private fun takeIdle(
+        poolName: String,
+        cutoff: Instant,
+    ): String? {
         val state = pools[poolName] ?: return null
-        val now = Instant.now()
         while (true) {
             val sandboxId = state.queue.poll() ?: return null
             val entry = state.map.remove(sandboxId) ?: continue // already removed (e.g. by removeIdle)
-            if (entry.expiresAt.isAfter(now)) return sandboxId
-            // expired, discard and poll next
+            if (entry.expiresAt.isAfter(cutoff)) return sandboxId
+            // expired or below minRemainingTtl, discard and poll next
         }
     }
 
