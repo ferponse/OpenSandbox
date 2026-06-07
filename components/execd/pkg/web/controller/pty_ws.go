@@ -43,6 +43,9 @@ const (
 	wsPingInterval  = 30 * time.Second
 	wsReadDeadline  = 60 * time.Second
 	wsWriteDeadline = 10 * time.Second
+	// wsTakeoverTimeout bounds how long a ?takeover=1 request waits for the current
+	// holder to release after being evicted, before giving up with 409.
+	wsTakeoverTimeout = 5 * time.Second
 )
 
 // PTYSessionWebSocket handles GET /pty/:sessionId/ws.
@@ -77,8 +80,15 @@ func PTYSessionWebSocket(ctx *gin.Context) {
 		return
 	}
 
-	// 2. Acquire exclusive WS lock.
-	if !session.LockWS() {
+	// 2. Acquire exclusive WS lock. With ?takeover=1, evict the current holder
+	//    instead of failing: the shell keeps running, the old client's WS is closed
+	//    with WSCloseTakenOver, and this client reattaches with replay (?since=...).
+	//    This lets a session move between devices without an orchestrator round-trip.
+	locked := session.LockWS()
+	if !locked && ctx.Query("takeover") == "1" {
+		locked = session.TakeoverWS(wsTakeoverTimeout)
+	}
+	if !locked {
 		ctx.JSON(http.StatusConflict, model.ErrorResponse{
 			Code:    model.WSErrCodeAlreadyConnected,
 			Message: "another client is already connected to pty session " + id,
@@ -152,6 +162,17 @@ func PTYSessionWebSocket(ctx *gin.Context) {
 		connMu.Unlock()
 		_ = conn.Close()
 	}
+
+	// Register the eviction hook so a later ?takeover=1 client can reclaim this
+	// session: it closes our WS with WSCloseTakenOver (unblocking the read loop) and
+	// cancels our goroutines; the deferred cleanup then releases the lock for the new
+	// client. clearEvictHandler(gen) only clears if the hook is still ours, so it never
+	// races a successor that already registered its own hook after taking over.
+	evictGen := session.SetEvictHandler(func() {
+		closeConn(model.WSCloseTakenOver, model.WSErrCodeTakenOver)
+		cancelOnce()
+	})
+	defer session.ClearEvictHandler(evictGen)
 
 	// Set initial read deadline; pong handler resets it.
 	_ = conn.SetReadDeadline(time.Now().Add(wsReadDeadline))

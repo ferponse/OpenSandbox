@@ -323,6 +323,65 @@ func TestPTYWS_ReplayOnReconnect(t *testing.T) {
 	require.True(t, gotReplay, "expected replay frame containing 'replay_test'")
 }
 
+// TestPTYWS_TakeoverEvictsHolder verifies that ?takeover=1 evicts the current
+// holder (closing its WS with WSCloseTakenOver) and that the taking-over client
+// reattaches to the SAME shell: it replays the prior scrollback and can read a
+// shell variable set by the evicted client.
+func TestPTYWS_TakeoverEvictsHolder(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found")
+	}
+	srv := newPTYTestServer(t)
+	defer srv.Close()
+
+	id := ptyCreateSession(t, srv)
+
+	// Holder connects, sets a shell var, and emits a marker.
+	conn1 := wsDialPTY(t, srv.URL, "/pty/"+id+"/ws", "")
+	ptyWaitFrame(t, conn1, "connected", 10*time.Second)
+	ptyWriteStdin(t, conn1, "TAKEOVER_VAR=alive\n")
+	ptyWriteStdin(t, conn1, "echo holder_marker\n")
+	ptyOutputContains(t, conn1, "holder_marker", 8*time.Second)
+
+	// A new client takes over.
+	conn2 := wsDialPTY(t, srv.URL, "/pty/"+id+"/ws", "takeover=1&since=0")
+
+	// 1. The holder's connection is closed with the takeover close code.
+	var closeErr *websocket.CloseError
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, _, err := conn1.ReadMessage(); err != nil {
+			_ = errors.As(err, &closeErr)
+			break
+		}
+	}
+	require.NotNil(t, closeErr, "holder should be closed with a WS CloseError after takeover")
+	require.Equal(t, model.WSCloseTakenOver, closeErr.Code)
+
+	// 2. The taking-over client replays the prior scrollback...
+	ptyOutputContains(t, conn2, "holder_marker", 8*time.Second)
+	ptyWaitFrame(t, conn2, "connected", 8*time.Second)
+
+	// 3. ...and it is the SAME shell: the var set on conn1 is still readable.
+	ptyWriteStdin(t, conn2, "echo SAMESHELL_$TAKEOVER_VAR\n")
+	ptyOutputContains(t, conn2, "SAMESHELL_alive", 8*time.Second)
+}
+
+// TestPTYWS_TakeoverOnFreeSessionConnects verifies ?takeover=1 is a no-op when the
+// session is free: it connects normally (there is no holder to evict).
+func TestPTYWS_TakeoverOnFreeSessionConnects(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found")
+	}
+	srv := newPTYTestServer(t)
+	defer srv.Close()
+
+	id := ptyCreateSession(t, srv)
+	conn := wsDialPTY(t, srv.URL, "/pty/"+id+"/ws", "takeover=1")
+	f := ptyWaitFrame(t, conn, "connected", 10*time.Second)
+	require.Equal(t, id, f.SessionID)
+}
+
 func TestPTYWS_ResizeFrame(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not found")
