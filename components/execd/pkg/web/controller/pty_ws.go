@@ -61,9 +61,11 @@ const (
 //  4. Start bash if not already running
 //     5+6. AtomicAttachOutputWithSnapshot (snapshot + attach under outMu — no loss window)
 //  7. defer: detach → pumpWg.Wait → UnlockWS → ClearEvictHandler (hook live through cleanup)
+//     Register close-only eviction hook (before initial writes, so a stalled replay can
+//     be interrupted without a connMu race)
 //  8. Send replay frame if snapshot non-empty
-//  9. Send connected frame, then register the eviction hook (after the unsynchronized
-//     initial writes, before the pumps start)
+//  9. Send connected frame, then upgrade hook to full evictClose+cancelOnce
+//     (initial writes done; all subsequent writes serialized by connMu)
 //  10. Start RFC 6455 ping, streamPump(s), exitWatcher goroutines
 //  11. Read loop: dispatch client frames
 func PTYSessionWebSocket(ctx *gin.Context) {
@@ -117,7 +119,7 @@ func PTYSessionWebSocket(ctx *gin.Context) {
 	if !locked {
 		if !session.TakeoverWS(wsTakeoverTimeout) {
 			writeErrFrame(conn, model.WSErrCodeAlreadyConnected,
-				"another client is already connected to pty session "+id)
+				"takeover timed out for pty session "+id)
 			_ = conn.Close()
 			return
 		}
@@ -213,6 +215,18 @@ func PTYSessionWebSocket(ctx *gin.Context) {
 		return conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
 	})
 
+	// Register a close-only eviction hook BEFORE the initial writes so a concurrent
+	// ?takeover=1 can interrupt a holder stalled during a large replay or the connected
+	// frame. At this point the initial writes run without connMu (pumps not yet started),
+	// so the hook must not acquire connMu or write to conn — only close it. Closing
+	// unblocks any blocked WriteMessage and makes the subsequent read loop exit, which
+	// triggers the deferred cleanup and releases the lock. cancelOnce is also called so
+	// all goroutines stop once the pumps do start.
+	evictGen = session.SetEvictHandler(func() {
+		cancelOnce()
+		_ = conn.Close()
+	})
+
 	// 8. Send replay frame if there is missed output.
 	if len(snapshotBytes) > 0 {
 		frame := make([]byte, 1+8+len(snapshotBytes))
@@ -241,13 +255,11 @@ func PTYSessionWebSocket(ctx *gin.Context) {
 		return
 	}
 
-	// Register the eviction hook now — after the replay/connected frames, which run
-	// without connMu (no pumps started yet), so a concurrent ?takeover=1 can never write
-	// a close frame while those initial writes are in flight (single-writer invariant).
-	// From here every write to conn is serialized by connMu (pumps + evictClose's
-	// TryLock). The hook closes our WS with WSCloseTakenOver (unblocking the read loop)
-	// and cancels our goroutines; the deferred cleanup then releases the lock. It is
-	// generation-tokened so a tearing-down handler never clears a successor's hook.
+	// Upgrade the eviction hook now that the initial writes are done and all subsequent
+	// writes will be serialized by connMu (pumps + evictClose's TryLock). The full hook
+	// sends the WSCloseTakenOver close frame best-effort so the client can distinguish an
+	// intentional handoff from a network drop, then closes the conn and cancels goroutines.
+	// Generation-tokened: a tearing-down handler never clears a successor's hook.
 	evictGen = session.SetEvictHandler(func() {
 		evictClose(model.WSCloseTakenOver, model.WSErrCodeTakenOver)
 		cancelOnce()
