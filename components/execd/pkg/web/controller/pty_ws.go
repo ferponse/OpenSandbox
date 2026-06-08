@@ -57,7 +57,7 @@ const (
 //  2. Acquire WS lock without eviction → 409 if held and not a ?takeover=1 request
 //  3. Upgrade HTTP → WebSocket
 //     3b. Takeover (if requested): evict the holder and acquire — only now that the
-//         handshake is accepted, so a failed upgrade never evicts anyone
+//     handshake is accepted, so a failed upgrade never evicts anyone
 //  4. Start bash if not already running
 //     5+6. AtomicAttachOutputWithSnapshot (snapshot + attach under outMu — no loss window)
 //  7. defer: detach → pumpWg.Wait → UnlockWS → ClearEvictHandler (hook live through cleanup)
