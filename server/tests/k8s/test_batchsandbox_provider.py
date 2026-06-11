@@ -1593,6 +1593,34 @@ spec:
         task_template = body["spec"]["taskTemplate"]
         assert task_template["spec"]["process"]["env"] == [{"name": "VERSION", "value": "11"}]
 
+    def test_create_workload_poolref_none_entrypoint_no_env_omits_task_template(self, mock_k8s_client):
+        """When entrypoint is None and env is empty, taskTemplate is omitted.
+
+        SDK pool mode callers omit entrypoint entirely (None), expecting the pool's
+        default command to run. This must not raise a TypeError.
+        """
+        provider = BatchSandboxProvider(mock_k8s_client)
+        mock_k8s_client.create_custom_object.return_value = {
+            "metadata": {"name": "test-id", "uid": "test-uid"}
+        }
+
+        provider.create_workload(
+            sandbox_id="test-id",
+            namespace="test-ns",
+            image_spec=ImageSpec(uri="python:3.11"),
+            entrypoint=None,
+            env={},
+            resource_limits={},
+            labels={},
+            expires_at=None,
+            execd_image="execd:latest",
+            extensions={"poolRef": "my-pool"},
+        )
+
+        body = mock_k8s_client.create_custom_object.call_args.kwargs["body"]
+        assert body["spec"]["poolRef"] == "my-pool"
+        assert "taskTemplate" not in body["spec"]
+
 
 class TestBatchSandboxProviderEgress:
     """BatchSandboxProvider egress sidecar tests"""

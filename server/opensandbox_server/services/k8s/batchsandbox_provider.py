@@ -331,6 +331,7 @@ class BatchSandboxProvider(WorkloadProvider):
         annotations: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Create a BatchSandbox by referencing an existing pool."""
+        entrypoint = entrypoint or DEFAULT_ENTRYPOINT
         spec: Dict[str, Any] = {
             "replicas": 1,
             "poolRef": pool_ref,
