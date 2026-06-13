@@ -516,7 +516,13 @@ class PersistedSnapshotService(SnapshotService):
                 lastTransitionAt=record.status.last_transition_at,
             ),
             createdAt=record.created_at,
-            imageUri=record.restore_config.image,
+            # The restore image is part of the contract only once the snapshot is Ready; never
+            # surface it for Creating/Deleting/Failed states (e.g. after deletion is requested).
+            imageUri=(
+                record.restore_config.image
+                if record.status.state == SnapshotState.READY
+                else None
+            ),
         )
 
 

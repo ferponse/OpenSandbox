@@ -771,7 +771,19 @@ class SnapshotInfo(
      * clusters). Populated once the snapshot reaches [SnapshotState.READY]; null otherwise.
      */
     val imageUri: String? = null,
-)
+) {
+    /**
+     * Binary-compatibility constructor preserving the pre-`imageUri` JVM signature for
+     * already-compiled (e.g. Java) callers; delegates [imageUri] to null.
+     */
+    constructor(
+        id: String,
+        sandboxId: String,
+        name: String?,
+        status: SnapshotStatus,
+        createdAt: OffsetDateTime,
+    ) : this(id, sandboxId, name, status, createdAt, null)
+}
 
 class SnapshotFilter private constructor(
     val sandboxId: String?,
