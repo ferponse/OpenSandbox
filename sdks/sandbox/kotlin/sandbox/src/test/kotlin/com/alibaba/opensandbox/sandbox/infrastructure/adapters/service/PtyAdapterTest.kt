@@ -192,14 +192,6 @@ class PtyAdapterTest {
     }
 
     @Test
-    fun `webSocket should use wss when the domain carries an https scheme`() {
-        val config = ConnectionConfig.builder().domain("https://${endpoint.endpoint}").build()
-        val adapter = PtyAdapter(HttpClientProvider(config), endpoint)
-
-        assertTrue(adapter.webSocket("sess-123").url.startsWith("wss://"))
-    }
-
-    @Test
     fun `createSession should map structured execd errors with code and request id`() {
         mockWebServer.enqueue(
             MockResponse()

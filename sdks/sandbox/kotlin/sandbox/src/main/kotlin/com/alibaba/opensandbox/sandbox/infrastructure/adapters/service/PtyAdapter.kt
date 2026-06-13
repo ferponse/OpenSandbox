@@ -56,10 +56,10 @@ internal class PtyAdapter(
 
     private val logger = LoggerFactory.getLogger(PtyAdapter::class.java)
 
-    // Honor an https domain even when `protocol` is left at its default, matching how the
-    // lifecycle base URL is resolved, so secured/server-proxy deployments use the right scheme.
-    private val httpScheme = resolveHttpScheme()
-    private val execdBaseUrl = "$httpScheme://${execdEndpoint.endpoint}"
+    // Use the configured protocol for the resolved execd endpoint, consistent with the other execd
+    // adapters (e.g. CommandsAdapter): a raw direct endpoint such as a pod IP / host-mapped port
+    // serves plain HTTP and must not be forced to https from the lifecycle domain scheme.
+    private val execdBaseUrl = "${httpClientProvider.config.protocol}://${execdEndpoint.endpoint}"
     private val execdApiClient =
         httpClientProvider.httpClient.newBuilder()
             .addInterceptor { chain ->
@@ -145,7 +145,7 @@ internal class PtyAdapter(
         since: Long?,
         takeover: Boolean,
     ): PtyWebSocket {
-        val scheme = if (httpScheme == "https") "wss" else "ws"
+        val scheme = if (httpClientProvider.config.protocol.equals("https", ignoreCase = true)) "wss" else "ws"
         val params =
             buildList {
                 if (mode == PtyMode.PIPE) add("pty=0")
@@ -159,15 +159,6 @@ internal class PtyAdapter(
         // headers, with endpoint headers taking precedence on conflicts.
         val headers = httpClientProvider.config.headers + execdEndpoint.headers
         return PtyWebSocket(url, headers)
-    }
-
-    private fun resolveHttpScheme(): String {
-        val domain = httpClientProvider.config.getDomain()
-        return when {
-            domain.startsWith("https://", ignoreCase = true) -> "https"
-            domain.startsWith("http://", ignoreCase = true) -> "http"
-            else -> httpClientProvider.config.protocol
-        }
     }
 
     private fun apiException(
