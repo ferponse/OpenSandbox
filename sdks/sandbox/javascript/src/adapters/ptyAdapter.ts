@@ -16,6 +16,7 @@ import type { ExecdClient } from "../openapi/execdClient.js";
 import { throwOnOpenApiFetchError } from "./openapiError.js";
 import type { PtySession, PtySessionStatus } from "../models/execd.js";
 import type { ExecdPty } from "../services/execdPty.js";
+import { SandboxError, SandboxException } from "../core/exceptions.js";
 
 export class PtyAdapter implements ExecdPty {
   constructor(private readonly client: ExecdClient) {}
@@ -41,11 +42,39 @@ export class PtyAdapter implements ExecdPty {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    // DELETE returns 200 with an empty body; avoid JSON-parsing the empty response.
+    // Success is an empty 200 body (Content-Length: 0), which openapi-fetch skips
+    // parsing; error responses (e.g. 404 CONTEXT_NOT_FOUND, 501 NOT_SUPPORTED) keep
+    // their JSON code/message so throwOnOpenApiFetchError can surface them.
     const { error, response } = await this.client.DELETE("/pty/{sessionId}", {
       params: { path: { sessionId } },
-      parseAs: "stream",
     });
     throwOnOpenApiFetchError({ error, response }, "Delete PTY session failed");
+  }
+}
+
+/**
+ * Fallback PTY service used when a custom {@link AdapterFactory} does not supply a
+ * PTY adapter. Keeps `sandbox.pty` defined while failing loudly on use, so the
+ * execd stack contract stays additive for pre-existing factories.
+ */
+export class UnavailablePtyAdapter implements ExecdPty {
+  private failure(): SandboxException {
+    return new SandboxException({
+      message:
+        "PTY service is not available: the configured adapter factory did not provide a PTY adapter.",
+      error: new SandboxError(SandboxError.INVALID_ARGUMENT, "PTY service unavailable"),
+    });
+  }
+
+  createSession(): Promise<PtySession> {
+    return Promise.reject(this.failure());
+  }
+
+  getSession(): Promise<PtySessionStatus> {
+    return Promise.reject(this.failure());
+  }
+
+  deleteSession(): Promise<void> {
+    return Promise.reject(this.failure());
   }
 }

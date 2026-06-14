@@ -41,7 +41,11 @@ export interface ExecdStack {
   files: SandboxFiles;
   health: ExecdHealth;
   metrics: ExecdMetrics;
-  pty: ExecdPty;
+  /**
+   * Optional for backward compatibility: factories created before PTY support may
+   * omit this. {@link Sandbox} installs an unavailable-PTY fallback when absent.
+   */
+  pty?: ExecdPty;
 }
 
 export interface CreateEgressStackOptions {

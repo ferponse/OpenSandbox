@@ -32,6 +32,7 @@ import type { ExecdCommands } from "./services/execdCommands.js";
 import type { ExecdHealth } from "./services/execdHealth.js";
 import type { ExecdMetrics } from "./services/execdMetrics.js";
 import type { ExecdPty } from "./services/execdPty.js";
+import { UnavailablePtyAdapter } from "./adapters/ptyAdapter.js";
 import type {
   CreateSandboxRequest,
   CredentialProxyConfig,
@@ -276,7 +277,7 @@ export class Sandbox {
     files: SandboxFiles;
     health: ExecdHealth;
     metrics: ExecdMetrics;
-    pty: ExecdPty;
+    pty?: ExecdPty;
     egress: Egress;
     credentialVault?: CredentialVault;
   }) {
@@ -300,7 +301,7 @@ export class Sandbox {
     this.files = opts.files;
     this.health = opts.health;
     this.metrics = opts.metrics;
-    this.pty = opts.pty;
+    this.pty = opts.pty ?? new UnavailablePtyAdapter();
     this.credentialVault = credentialVault;
   }
 

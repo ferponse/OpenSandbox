@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { PtyAdapter, createExecdClient } from "../dist/internal.js";
+import { PtyAdapter, UnavailablePtyAdapter, createExecdClient } from "../dist/internal.js";
 
 test("PtyAdapter.createSession posts to /pty and maps session_id", async () => {
   const pty = new PtyAdapter(createExecdClient({
@@ -56,10 +56,37 @@ test("PtyAdapter.deleteSession issues a DELETE", async () => {
     async fetch(request) {
       method = request.method;
       assert.equal(new URL(request.url).pathname, "/pty/sess-123");
-      return new Response("", { status: 200 });
+      // Empty success body, as the server sends it (Content-Length: 0).
+      return new Response(null, { status: 200, headers: { "Content-Length": "0" } });
     },
   }));
 
   await pty.deleteSession("sess-123");
   assert.equal(method, "DELETE");
+});
+
+test("PtyAdapter.deleteSession surfaces JSON error bodies", async () => {
+  const pty = new PtyAdapter(createExecdClient({
+    baseUrl: "http://execd.test",
+    async fetch() {
+      return Response.json(
+        { code: "CONTEXT_NOT_FOUND", message: "no such pty session" },
+        { status: 404 },
+      );
+    },
+  }));
+
+  await assert.rejects(pty.deleteSession("sess-404"), (err) => {
+    assert.equal(err.error?.code, "CONTEXT_NOT_FOUND");
+    assert.match(err.message, /no such pty session/);
+    return true;
+  });
+});
+
+test("UnavailablePtyAdapter throws a descriptive error on use", async () => {
+  const pty = new UnavailablePtyAdapter();
+  await assert.rejects(pty.createSession(), (err) => {
+    assert.match(err.message, /PTY service is not available/);
+    return true;
+  });
 });
